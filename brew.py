@@ -54,22 +54,53 @@ class Brew(dotbot.Plugin):
     def _install(self, install_cmd, packages_list):
         cwd = self._context.base_directory()
         log = self._log
-        with open(os.devnull, 'w') as devnull:
-            stdin = stdout = stderr = devnull
-            for package in packages_list:
-                if install_cmd == 'brew install':
-                    cmd = "brew ls --versions %s" % package
+        all_success = True
+        
+        for package in packages_list:
+            # Check if package is already installed
+            if install_cmd == 'brew install':
+                check_cmd = "brew ls --versions %s" % package
+            else:
+                # For casks, use the proper command to check if installed
+                check_cmd = "brew list --cask %s 2>/dev/null || brew info --cask %s | grep -q 'Not installed'" % (package, package)
+                
+            with open(os.devnull, 'w') as devnull:
+                is_installed = subprocess.call(check_cmd, shell=True, stdin=devnull, 
+                                             stdout=devnull, stderr=devnull, cwd=cwd)
+                
+            if is_installed == 0:
+                log.info("%s is already installed" % package)
+                continue
+                
+            # If not installed, try to install it
+            log.info("Installing %s" % package)
+            cmd = "%s %s" % (install_cmd, package)
+            
+            # Capture the output to check for specific error patterns
+            process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, 
+                                      stderr=subprocess.PIPE, cwd=cwd)
+            stdout, stderr = process.communicate()
+            result = process.returncode
+            
+            if result != 0:
+                # Check for common "already installed" messages that might come with error codes
+                stderr_str = stderr.decode('utf-8', errors='ignore') 
+                stdout_str = stdout.decode('utf-8', errors='ignore')
+                already_installed_msgs = [
+                    "already installed",
+                    "already exists", 
+                    "is already installed",
+                    "latest version already installed",
+                    "already been downloaded"
+                ]
+                
+                if any(msg in stderr_str or msg in stdout_str for msg in already_installed_msgs):
+                    log.info("Application %s appears to be already installed, continuing..." % package)
                 else:
-                    cmd = "brew cask ls --versions %s" % package
-                isInstalled = subprocess.call(cmd, shell=True, stdin=stdin, stdout=stdout, stderr=stderr, cwd=cwd)
-                if isInstalled != 0:
-                    log.info("Installing %s" % package)
-                    cmd = "%s %s" % (install_cmd, package)
-                    result = subprocess.call(cmd, shell=True, cwd=cwd)
-                    if result != 0:
-                        log.warning('Failed to install [%s]' % package)
-                        return False
-            return True
+                    log.warning('Failed to install [%s]' % package)
+                    all_success = False
+        
+        return all_success
 
     def _install_bundle(self, brew_files):
         cwd = self._context.base_directory()
